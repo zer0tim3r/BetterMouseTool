@@ -20,7 +20,7 @@ void openAccessibilitySettings(void) {
     bool gesture;
     CGEventType event;
     int button;
-    int dx, dy;
+    CGPoint position;
 }
 @end
 
@@ -30,12 +30,11 @@ void openAccessibilitySettings(void) {
     return [super init];
 }
 
-- (void)reset:(CGEventType)_event:(int)_button:(bool)press {
+- (void)reset:(bool)press:(CGEventType)_event:(int)_button:(CGPoint)_position {
     self->gesture = press;
     self->event = _event;
     self->button = _button;
-    self->dx = 0;
-    self->dy = 0;
+    self->position = _position;
 }
 @end
 
@@ -115,112 +114,91 @@ CGPoint getCurrentMousePosition(void) {
 CGEventRef eventCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *refcon) {
     // thread safe code
     if (!context) return event;
-    
-    @synchronized(context)
-    {
-        if (type == kCGEventLeftMouseDown
-            || type == kCGEventLeftMouseUp
-            || type == kCGEventRightMouseDown
-            || type == kCGEventRightMouseUp
-            || type == kCGEventOtherMouseDown
-            || type == kCGEventOtherMouseUp) {
-            int64_t button = CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber);
-            int64_t event_id = CGEventGetIntegerValueField(event, kCGMouseEventNumber);
+
+    if (type == kCGEventLeftMouseDown
+        || type == kCGEventLeftMouseUp
+        || type == kCGEventRightMouseDown
+        || type == kCGEventRightMouseUp
+        || type == kCGEventOtherMouseDown
+        || type == kCGEventOtherMouseUp) {
+        int64_t button = CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber);
+        int64_t event_id = CGEventGetIntegerValueField(event, kCGMouseEventNumber);
 //            NSLog(@"button : %llu (%lu)", button, (unsigned long)type);
-            if (button == (0x1 | (1 << 4))) {
-                NSLog(@"Get original input 1");
-                CGEventSetIntegerValueField(event, kCGMouseEventButtonNumber, 2);
-                return event;
-            }
-            else if (button == (0x2 | (1 << 4))) {
-                NSLog(@"Get original input 2");
-                CGEventSetIntegerValueField(event, kCGMouseEventButtonNumber, 2);
-                return event;
-            }
-            else if (button == 2) { // Middle Mouse Button (Button 2)
-                if (type == kCGEventOtherMouseDown) {
-                    NSLog(@"Middle Mouse Button Pressed!");
+        if (button == (0x1 | (1 << 4))) {
+            NSLog(@"Get original input 1");
+            CGEventSetIntegerValueField(event, kCGMouseEventButtonNumber, 2);
+            return event;
+        }
+        else if (button == (0x2 | (1 << 4))) {
+            NSLog(@"Get original input 2");
+            CGEventSetIntegerValueField(event, kCGMouseEventButtonNumber, 2);
+            return event;
+        }
+        else if (button == 2) { // Middle Mouse Button (Button 2)
+            if (type == kCGEventOtherMouseDown) {
+                NSLog(@"Middle Mouse Button Pressed!");
                 
+                @synchronized(context)
+                {
                     if (!context->gesture) {
-                        [context reset:type:(int)button:true];
+                        [context reset:true:type:(int)button:getCurrentMousePosition()];
                         CGEventSetType(event, kCGEventNull);
                         CGAssociateMouseAndMouseCursorPosition(FALSE);
-                        return event;
                     }
-
+                }
+                
+                return event;
+            } else {
+                NSLog(@"Middle Mouse Button Released!");
+                
+                if (context->gesture) {
                     
-                } else {
-                    NSLog(@"Middle Mouse Button Released!");
+                    CGPoint position = getCurrentMousePosition();
                     
-                    if (context->gesture) {
-                        int horizontal = context->dx,
-                            vertical = context->dy;
-                        
-                        int absHorizontal = sqrt(pow(horizontal, 2.0)),
-                            absVertical = sqrt(pow(vertical, 2.0));
-                        
-                        if (absHorizontal > absVertical && absHorizontal > MIN_MOVEMENT) {
-                            moveSpace(horizontal > 0);
-                        } else if (absHorizontal < absVertical && absVertical > MIN_MOVEMENT) {
-                            if (vertical > 0) { // is down
-                                launchAppExpose();
-                            } else {
-                                launchMissionControl();
-                            }
+                    int horizontal = position.x - context->position.x,
+                    vertical = position.y - context->position.y;
+                    
+                    int absHorizontal = sqrt(pow(horizontal, 2.0)),
+                        absVertical = sqrt(pow(vertical, 2.0));
+                    
+                    if (absHorizontal > absVertical && absHorizontal > MIN_MOVEMENT) {
+                        moveSpace(horizontal > 0);
+                    } else if (absHorizontal < absVertical && absVertical > MIN_MOVEMENT) {
+                        if (vertical > 0) { // is down
+                            launchAppExpose();
+                        } else {
+                            launchMissionControl();
                         }
-                        else {
-                            NSLog(@"Append original input");
-                            
-                            CGEventRef origin = CGEventCreate(NULL);
-                            CGEventSetType(origin, context->event);
-                            CGEventSetIntegerValueField(origin, kCGMouseEventClickState, 1);
-                            CGEventSetIntegerValueField(origin, kCGMouseEventButtonNumber, (0x1 | (1 << 4)));
-                            CGEventPost(kCGHIDEventTap, origin);
-                            CGEventSetType(origin, context->event + 1);
-                            CGEventSetIntegerValueField(origin, kCGMouseEventClickState, 1);
-                            CGEventSetIntegerValueField(origin, kCGMouseEventButtonNumber, (0x2 | (1 << 4)));
-                            CGEventPost(kCGHIDEventTap, origin);
-                            CFRelease(origin);
-                            
-                        }
+                    }
+                    else {
+                        NSLog(@"Append original input");
                         
-                        NSLog(@"Gesture : %d, %d", horizontal, vertical);
+                        CGEventRef origin = CGEventCreate(NULL);
+                        CGEventSetType(origin, context->event);
+                        CGEventSetIntegerValueField(origin, kCGMouseEventClickState, 1);
+                        CGEventSetIntegerValueField(origin, kCGMouseEventButtonNumber, (0x1 | (1 << 4)));
+                        CGEventPost(kCGHIDEventTap, origin);
+                        CGEventSetType(origin, context->event + 1);
+                        CGEventSetIntegerValueField(origin, kCGMouseEventClickState, 1);
+                        CGEventSetIntegerValueField(origin, kCGMouseEventButtonNumber, (0x2 | (1 << 4)));
+                        CGEventPost(kCGHIDEventTap, origin);
+                        CFRelease(origin);
                         
+                    }
+                    
+                    NSLog(@"Gesture : %d, %d", horizontal, vertical);
+                    
+                    @synchronized(context)
+                    {
                         CGAssociateMouseAndMouseCursorPosition(TRUE);
-                        [context reset:type:(int)button:false];
+                        [context reset:false:type:(int)button:CGPointMake(0, 0)];
                         CGEventSetType(event, kCGEventNull);
-                        return event;
                     }
+                    
+                    return event;
                 }
             }
         }
-        else if (type == kCGEventMouseMoved || type == kCGEventOtherMouseDragged) {
-            
-            if (context->gesture && CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber) != -1) {
-                int dx = (int)CGEventGetIntegerValueField(event, kCGMouseEventDeltaX),
-                    dy = (int)CGEventGetIntegerValueField(event, kCGMouseEventDeltaY);
-                
-                context->dx += dx;
-                context->dy += dy;
-                
-                
-//                CGEventRef origin = CGEventCreateMouseEvent(
-//                    NULL, kCGEventMouseMoved,
-//                    getCurrentMousePosition(),
-//                    kCGMouseButtonLeft // ignored
-//                );
-//                CGEventSetIntegerValueField(origin, kCGMouseEventButtonNumber, -1);
-//                CGEventPost(kCGHIDEventTap, origin);
-//                CFRelease(origin);
-//                
-//                CGEventSetIntegerValueField(event, kCGMouseEventDeltaX, -dx);
-//                CGEventSetIntegerValueField(event, kCGMouseEventDeltaY, -dy);
-//                NSLog(@"Supreesing mouse movement : %d %d", dx, dy);
-                
-                return event;
-            }
-        }
-        
     }
     
     return event; // 이벤트를 시스템에 전달
@@ -228,7 +206,7 @@ CGEventRef eventCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef eve
 
 CFMachPortRef getEventTap(void) {
     // 마우스 이벤트 감지 설정
-    CGEventMask eventMask = CGEventMaskBit(kCGEventLeftMouseDown) | CGEventMaskBit(kCGEventLeftMouseUp) | CGEventMaskBit(kCGEventRightMouseDown) | CGEventMaskBit(kCGEventRightMouseUp) | CGEventMaskBit(kCGEventOtherMouseDown) | CGEventMaskBit(kCGEventOtherMouseUp) | CGEventMaskBit(kCGEventMouseMoved) | CGEventMaskBit(kCGEventOtherMouseDragged);
+    CGEventMask eventMask = CGEventMaskBit(kCGEventLeftMouseDown) | CGEventMaskBit(kCGEventLeftMouseUp) | CGEventMaskBit(kCGEventRightMouseDown) | CGEventMaskBit(kCGEventRightMouseUp) | CGEventMaskBit(kCGEventOtherMouseDown) | CGEventMaskBit(kCGEventOtherMouseUp);
     
     CFMachPortRef eventTap = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, eventMask, eventCallback, NULL);
     
